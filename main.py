@@ -222,111 +222,191 @@ class BlackjackView(discord.ui.View):
         view = View()
         view.add_item(Button(label="🔁 Rejouer", style=discord.ButtonStyle.primary, custom_id="replay_blackjack"))
         return view
-        
-# === COULEURS DE LA ROULETTE ===
-ROUGE = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
-NOIR = {2,4,6,8,10,11,13,15,17,20,22,24,26,28,29,31,33,35}
 
-class RouletteEuropeenneView(View):
+class RetryButton(Button):
+    def __init__(self, user):
+        super().__init__(label="🔁 Rejouer", style=discord.ButtonStyle.success)
+        self.user = user
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user != self.user:
+            return await interaction.response.send_message("Ce n’est pas ta partie.", ephemeral=True)
+
+        new_view = RouletteEuropeenneView(self.user)
+        embed = discord.Embed(
+            title="🎡 Nouvelle Partie de Roulette Européenne",
+            description="Choisissez un numéro **ou** une couleur, puis cliquez sur **Lancer la roulette**.",
+            color=discord.Color.blurple()
+        )
+        await interaction.response.edit_message(embed=embed, view=new_view)
+
+
+class RouletteEuropeenneView(discord.ui.View):
     def __init__(self, user):
         super().__init__(timeout=None)
         self.user = user
         self.bet_number = None
         self.bet_color = None
 
-        self.add_item(RangeSelect(self))
-        self.add_item(ColorSelect(self))
+        # Sélecteurs plages de numéros
+        options_1_12 = [discord.SelectOption(label=str(n), description=f"Parier sur le numéro {n}") for n in range(1, 13)]
+        options_13_24 = [discord.SelectOption(label=str(n), description=f"Parier sur le numéro {n}") for n in range(13, 25)]
+        options_25_36 = [discord.SelectOption(label=str(n), description=f"Parier sur le numéro {n}") for n in range(25, 37)]
+
+        self.select_number_1 = Select(
+            placeholder="1-12",
+            options=options_1_12,
+            max_values=1,
+            custom_id="roulette_num_1"
+        )
+        self.select_number_2 = Select(
+            placeholder="13-24",
+            options=options_13_24,
+            max_values=1,
+            custom_id="roulette_num_2"
+        )
+        self.select_number_3 = Select(
+            placeholder="25-36",
+            options=options_25_36,
+            max_values=1,
+            custom_id="roulette_num_3"
+        )
+        # Select couleur
+        color_options = [
+            discord.SelectOption(label="Rouge", description="Parier sur la couleur Rouge", emoji="🔴"),
+            discord.SelectOption(label="Noir", description="Parier sur la couleur Noir", emoji="⚫")
+        ]
+        self.select_color = Select(
+            placeholder="Choisissez une couleur",
+            options=color_options,
+            max_values=1,
+            custom_id="roulette_color"
+        )
+
+        # Ajouter les sélecteurs
+        self.add_item(self.select_number_1)
+        self.add_item(self.select_number_2)
+        self.add_item(self.select_number_3)
+        self.add_item(self.select_color)
+
+        # Bouton Lancer roulette
         self.spin_button = Button(label="🎡 Lancer la roulette", style=discord.ButtonStyle.primary, disabled=True)
-        self.spin_button.callback = self.spin_callback
         self.add_item(self.spin_button)
 
-    def enable_spin_if_ready(self):
-        if self.bet_number is not None and self.bet_color is not None:
-            self.spin_button.disabled = False
+        # Assign callbacks
+        self.select_number_1.callback = self.number_select_callback
+        self.select_number_2.callback = self.number_select_callback
+        self.select_number_3.callback = self.number_select_callback
+        self.select_color.callback = self.color_select_callback
+        self.spin_button.callback = self.spin_callback
+
+    async def number_select_callback(self, interaction: discord.Interaction):
+        if interaction.user != self.user:
+            return await interaction.response.send_message("Ce n’est pas ta partie.", ephemeral=True)
+
+        # Récupérer le numéro choisi
+        selected_value = None
+        for select in [self.select_number_1, self.select_number_2, self.select_number_3]:
+            if interaction.data["custom_id"] == select.custom_id:
+                selected_value = int(select.values[0])
+                break
+
+        if selected_value is None:
+            return await interaction.response.send_message("Erreur de sélection.", ephemeral=True)
+
+        # Désactiver les autres sélects et la couleur
+        self.bet_number = selected_value
+        self.bet_color = None
+
+        # Clear toutes les sélections sauf celle qui vient d'être choisie
+        for select in [self.select_number_1, self.select_number_2, self.select_number_3, self.select_color]:
+            if select.custom_id != interaction.data["custom_id"]:
+                select.disabled = True
+            else:
+                # Fixe la sélection actuelle pour garder le visuel
+                select.disabled = False
+                select.options = [
+                    discord.SelectOption(label=opt.label, value=opt.value, default=(int(opt.value) == selected_value if opt.value.isdigit() else False))
+                    for opt in select.options
+                ]
+
+        self.spin_button.disabled = False
+
+        await interaction.response.edit_message(content=f"Tu as parié sur le numéro {self.bet_number}. Lance la roulette !", view=self)
+
+    async def color_select_callback(self, interaction: discord.Interaction):
+        if interaction.user != self.user:
+            return await interaction.response.send_message("Ce n’est pas ta partie.", ephemeral=True)
+
+        chosen_color = self.select_color.values[0]
+        self.bet_color = chosen_color.lower()
+        self.bet_number = None
+
+        # Désactiver tous les selects de numéro
+        for select in [self.select_number_1, self.select_number_2, self.select_number_3]:
+            select.disabled = True
+            # Reset leurs options par défaut
+            select.options = [discord.SelectOption(label=opt.label, value=opt.value, default=False) for opt in select.options]
+
+        # Fixer la sélection couleur (pour garder le visuel)
+        self.select_color.options = [
+            discord.SelectOption(label=opt.label, value=opt.value, default=(opt.label.lower() == self.bet_color))
+            for opt in self.select_color.options
+        ]
+
+        self.spin_button.disabled = False
+
+        await interaction.response.edit_message(content=f"Tu as parié sur la couleur {self.bet_color.capitalize()}. Lance la roulette !", view=self)
+
+    def get_color(self, number):
+        # 0 est vert, pas rouge ni noir
+        if number == 0:
+            return "vert"
+        # Rouge (nombres rouges sur roulette européenne)
+        rouges = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
+        return "rouge" if number in rouges else "noir"
 
     async def spin_callback(self, interaction: discord.Interaction):
         if interaction.user != self.user:
-            return await interaction.response.send_message("Ce n'est pas ta partie.", ephemeral=True)
+            return await interaction.response.send_message("Ce n’est pas ta partie.", ephemeral=True)
 
         result = random.randint(0, 36)
-        color = "Rouge" if result in ROUGE else "Noir" if result in NOIR else "Vert"
+        result_color = self.get_color(result)
 
-        win = result == self.bet_number and (
-            (color == "Rouge" and self.bet_color == "Rouge") or
-            (color == "Noir" and self.bet_color == "Noir") or
-            (color == "Vert" and self.bet_color == "Vert")
-        )
-
-        if win:
-            description = f"🎉 La roulette s'arrête sur **{result} ({color})** !\nTu as gagné ton pari sur **{self.bet_number} {self.bet_color}** ! 🏆"
-            color_embed = discord.Color.green()
+        if self.bet_number is not None:
+            win = (result == self.bet_number)
+        elif self.bet_color is not None:
+            win = (result_color == self.bet_color)
         else:
-            description = f"❌ La roulette s'arrête sur **{result} ({color})**.\nDommage, tu avais parié sur **{self.bet_number} {self.bet_color}**."
-            color_embed = discord.Color.red()
+            win = False
+
+        description = f"🎰 La bille est tombée sur **{result} ({result_color.upper()})**.\n"
+        if win:
+            description += "🏆 Félicitations, tu as **gagné** ton pari !"
+            color = discord.Color.green()
+        else:
+            if self.bet_number is not None:
+                lost = f"ton numéro **{self.bet_number}**"
+            else:
+                lost = f"la couleur **{self.bet_color.capitalize()}**"
+            description += f"❌ Dommage, tu as perdu {lost}."
+            color = discord.Color.red()
 
         embed = discord.Embed(
-            title="🎡 Roulette Européenne - Résultat",
+            title="🎡 Résultat de la Roulette",
             description=description,
-            color=color_embed
+            color=color
         )
 
-        # Désactive tous les éléments
-        for child in self.children:
-            child.disabled = True
+        # Désactiver tout
+        for item in self.children:
+            item.disabled = True
+
+        # On enlève tout et on ajoute juste le bouton rejouer
+        self.clear_items()
+        self.add_item(RetryButton(self.user))
 
         await interaction.response.edit_message(embed=embed, view=self)
-
-class RangeSelect(Select):
-    def __init__(self, parent_view: RouletteEuropeenneView):
-        self.parent_view = parent_view
-        options = [
-            discord.SelectOption(label="0 à 12", value="0-12"),
-            discord.SelectOption(label="13 à 24", value="13-24"),
-            discord.SelectOption(label="25 à 36", value="25-36"),
-        ]
-        super().__init__(placeholder="Choisissez une plage de numéros", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user != self.parent_view.user:
-            return await interaction.response.send_message("Ce n'est pas ta partie.", ephemeral=True)
-
-        range_start, range_end = map(int, self.values[0].split("-"))
-        numbers = list(range(range_start, range_end + 1))
-        number_options = [discord.SelectOption(label=str(n), value=str(n)) for n in numbers]
-
-        select = Select(placeholder="Choisissez un numéro", options=number_options)
-
-        async def number_callback(inter: discord.Interaction):
-            if inter.user != self.parent_view.user:
-                return await inter.response.send_message("Ce n'est pas ta partie.", ephemeral=True)
-
-            self.parent_view.bet_number = int(select.values[0])
-            self.parent_view.enable_spin_if_ready()
-            await inter.response.edit_message(content=f"Numéro choisi: **{select.values[0]}**", view=self.parent_view)
-
-        select.callback = number_callback
-        self.parent_view.add_item(select)
-        await interaction.response.edit_message(content="Choisissez votre numéro :", view=self.parent_view)
-
-class ColorSelect(Select):
-    def __init__(self, parent_view: RouletteEuropeenneView):
-        self.parent_view = parent_view
-        options = [
-            discord.SelectOption(label="Rouge", value="Rouge"),
-            discord.SelectOption(label="Noir", value="Noir"),
-            discord.SelectOption(label="Vert (0 seulement)", value="Vert"),
-        ]
-        super().__init__(placeholder="Choisissez une couleur", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user != self.parent_view.user:
-            return await interaction.response.send_message("Ce n'est pas ta partie.", ephemeral=True)
-
-        self.parent_view.bet_color = self.values[0]
-        self.parent_view.enable_spin_if_ready()
-        await interaction.response.edit_message(content=f"Couleur choisie: **{self.values[0]}**", view=self.parent_view)
-
-
 
 # ============ Vue de lancement de jeu ============
 
@@ -350,7 +430,7 @@ class StartGameView(discord.ui.View):
     async def start_roulette(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
             title="🎡 Roulette Européenne",
-            description="Choisissez un numéro sur lequel parier puis lancez la roulette !",
+            description="Choisissez un numéro (1-36) **ou** une couleur, puis cliquez sur **Lancer la roulette**.",
             color=discord.Color.blurple()
         )
         await interaction.response.send_message(embed=embed, view=RouletteEuropeenneView(interaction.user))
